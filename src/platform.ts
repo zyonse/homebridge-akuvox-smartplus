@@ -96,8 +96,10 @@ export class AkuvoxPlatform implements DynamicPlatformPlugin {
     const activeUUIDs = new Set<string>();
 
     for (const relay of relays) {
-      const doorConfig = doorConfigs.find((door) => this.matches(door.name, relay));
-      if (doorConfig?.hidden) {
+      // An exact id match wins over a name match, since names repeat across community devices
+      const doorConfig = doorConfigs.find((door) => this.matchesId(door.name, relay))
+        || doorConfigs.find((door) => this.matches(door.name, relay));
+      if (doorConfig?.hidden || (!doorConfig && this.config.onlyListedDoors)) {
         continue;
       }
       const type: AccessoryType = doorConfig?.type || this.config.defaultType || 'garage';
@@ -130,6 +132,10 @@ export class AkuvoxPlatform implements DynamicPlatformPlugin {
     }
 
     this.scheduleTokenRefresh(credentials.refreshedAt);
+  }
+
+  private matchesId(name: string | undefined, relay: DoorRelay) {
+    return String(name ?? '').trim().toLowerCase() === relay.id.toLowerCase();
   }
 
   private matches(name: string | undefined, relay: DoorRelay) {

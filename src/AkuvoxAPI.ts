@@ -307,47 +307,44 @@ export type EmailLoginResult =
  * Returns credentials directly, or a temporary token when an emailed code is required
  */
 export async function beginEmailLogin(account: string, password: string, regions: string[], fetchFn: FetchFn = fetch) {
-  const digest = doubleMd5(password);
-  const loginNames = [caesarShift(account)];
-  if (/\d/.test(account)) {
-    loginNames.push(caesarShift(account, true));
-  }
+  // Match the Android app (LoginModel/UrlTools): digits are always shifted, the query is built with String.format
+  // so '@' is sent unencoded, and id_code is only sent for PM accounts. ucloud rejects '%40' or id_code=(null)
+  // with "user not exist or passwd incorrect".
+  const loginName = encodeURIComponent(caesarShift(account.trim(), true)).replace(/%40/g, '@');
+  const url = (subdomain: string) => `${gateUrl(subdomain, 'login')}?user=${loginName}&passwd=${doubleMd5(password)}`;
 
   for (const subdomain of regions) {
-    for (const loginName of loginNames) {
-      const params = new URLSearchParams({ user: loginName, passwd: digest, id_code: '(null)' });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let data: any;
-      try {
-        data = await sendRequest(fetchFn, {
-          method: 'GET',
-          url: `${gateUrl(subdomain, 'login')}?${params}`,
-          headers: {
-            'Accept': '*/*',
-            'X-AUTH-TOKEN': '',
-            'api-version': '7.33',
-            'User-Agent': EMAIL_LOGIN_USER_AGENT,
-            'Accept-Language': ACCEPT_LANGUAGE,
-          },
-        });
-      } catch (error) {
-        if (error instanceof AkuvoxApiError && error.kind === 'rate-limit') {
-          throw error;
-        }
-        continue;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let data: any;
+    try {
+      data = await sendRequest(fetchFn, {
+        method: 'GET',
+        url: url(subdomain),
+        headers: {
+          'Accept': '*/*',
+          'X-AUTH-TOKEN': '',
+          'api-version': '7.33',
+          'User-Agent': EMAIL_LOGIN_USER_AGENT,
+          'Accept-Language': ACCEPT_LANGUAGE,
+        },
+      });
+    } catch (error) {
+      if (error instanceof AkuvoxApiError && error.kind === 'rate-limit') {
+        throw error;
       }
+      continue;
+    }
 
-      const host = data?.rest_server_https ? resolveHost(String(data.rest_server_https), subdomain) : '';
-      if (data?.token) {
-        return { credentials: credentialsFrom(data, subdomain, host || await fetchRestServer(subdomain, fetchFn)) } as EmailLoginResult;
-      }
-      if (data?.two_factor_auth_temp_token) {
-        return {
-          subdomain,
-          host: host || await fetchRestServer(subdomain, fetchFn),
-          tempToken: String(data.two_factor_auth_temp_token),
-        } as EmailLoginResult;
-      }
+    const host = data?.rest_server_https ? resolveHost(String(data.rest_server_https), subdomain) : '';
+    if (data?.token) {
+      return { credentials: credentialsFrom(data, subdomain, host || await fetchRestServer(subdomain, fetchFn)) } as EmailLoginResult;
+    }
+    if (data?.two_factor_auth_temp_token) {
+      return {
+        subdomain,
+        host: host || await fetchRestServer(subdomain, fetchFn),
+        tempToken: String(data.two_factor_auth_temp_token),
+      } as EmailLoginResult;
     }
   }
   throw new AkuvoxAuthError(`SmartPlus did not accept that email and password on ${regions.join(', ')}`);

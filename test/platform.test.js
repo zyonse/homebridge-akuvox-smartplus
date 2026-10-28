@@ -63,6 +63,21 @@ test('each relay becomes an accessory, with per-door type and hidden overrides',
   assert.equal(garage.context.relay.id, 'AABBCC:0');
 });
 
+test('onlyListedDoors adds just the listed doors, and an id beats a duplicate name', async (t) => {
+  const { api, platform, registered } = await setup({
+    config: {
+      onlyListedDoors: true,
+      doors: [{ name: 'garage', type: 'switch' }, { name: 'AABBCC:0', type: 'lock' }, { name: 'Front Door' }],
+    },
+  });
+  await platform.discoverDevices();
+  t.after(() => api.emit('shutdown'));
+
+  assert.deepEqual(registered.map((accessory) => accessory.displayName), ['Garage', 'Front Door']);
+  assert.ok(registered[0].getService(api.hap.Service.LockMechanism));
+  assert.ok(registered[1].getService(api.hap.Service.GarageDoorOpener));
+});
+
 test('opening the garage fires the relay, shows open, then resets to closed', async (t) => {
   const { api, platform, registered, fetchFn } = await setup({ config: { openDuration: 0.05 } });
   await platform.discoverDevices();

@@ -110,7 +110,7 @@ async function main() {
     if (relays.length) {
       console.log('Door relays on this account (use these names in the plugin\'s "doors" config):');
       for (const relay of relays) {
-        console.log(`  - ${relay.doorName}  (device "${relay.deviceName}", relay ${relay.relayId})`);
+        console.log(`  - ${relay.doorName}  (device "${relay.deviceName}", id ${relay.id})`);
       }
     } else {
       console.log('No door relays were found on this account.');

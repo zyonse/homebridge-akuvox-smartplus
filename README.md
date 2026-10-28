@@ -47,8 +47,9 @@ The command prints every door relay on the account and saves the session to `<st
 | Option | Description |
 | --- | --- |
 | `defaultType` | `garage` (default), `switch`, or `lock` |
+| `onlyListedDoors` | Only add doors listed in `doors`. Recommended for community accounts, which can see every building door |
 | `openDuration` | Seconds to show a door as open after triggering. Defaults: garage 60, switch 1, lock 10 |
-| `doors[].name` | Door name, device name, or `mac:relay` id, as printed by the login command. Case-insensitive |
+| `doors[].name` | Door name, device name, or `mac:relay` id, as printed by the login command. Case-insensitive. Use the id when names repeat |
 | `doors[].type` / `openDuration` | Per-door overrides |
 | `doors[].hidden` | Leave this relay out of HomeKit |
 

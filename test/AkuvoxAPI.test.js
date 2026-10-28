@@ -14,7 +14,7 @@ const {
   resolveHost,
   unwrapResponse,
 } = require('../dist/AkuvoxAPI');
-const { fakeFetch, sequence, silentLog } = require('./helpers/fakeFetch');
+const { fakeFetch, silentLog } = require('./helpers/fakeFetch');
 
 const credentials = () => ({
   subdomain: 'ucloud',
@@ -120,24 +120,23 @@ test('non-auth failures are not treated as expired sessions', async () => {
   assert.equal(fetchFn.calls.length, 1);
 });
 
-test('beginEmailLogin tries each region and login encoding until one returns a 2FA token', async () => {
+test('beginEmailLogin builds the query like the Android app and tries each region', async () => {
   const fetchFn = fakeFetch([
-    { match: (call) => call.url.startsWith('https://gate.ucloud.akuvox.com:8600/login'), reply: { json: { result: 1, message: 'no' } } },
+    { match: (call) => call.url.startsWith('https://gate.ucloud.akuvox.com:8600/login'), reply: { json: { err_code: '1000100004', message: 'no' } } },
     {
       match: (call) => call.url.startsWith('https://gate.ecloud.akuvox.com:8600/login'),
-      reply: sequence(
-        { json: { result: 1, message: 'no' } },
-        { json: { result: 0, datas: { two_factor_auth_temp_token: 'tmp', rest_server_https: 'ecloud.akuvox.com:8443' } } },
-      ),
+      reply: { json: { result: 0, datas: { two_factor_auth_temp_token: 'tmp', rest_server_https: 'ecloud.akuvox.com:8443' } } },
     },
   ]);
-  const result = await beginEmailLogin('user7@example.com', 'pw', ['ucloud', 'ecloud'], fetchFn);
+  const result = await beginEmailLogin(' user7+hb@example.com ', 'pw', ['ucloud', 'ecloud'], fetchFn);
   assert.deepEqual(result, { subdomain: 'ecloud', host: 'ecloud.akuvox.com:8443', tempToken: 'tmp' });
 
-  const lastLogin = new URL(fetchFn.calls.at(-1).url);
-  assert.equal(lastLogin.searchParams.get('user'), 'xvhu0@hadpsoh.frp');
-  assert.equal(lastLogin.searchParams.get('passwd'), doubleMd5('pw'));
-  assert.equal(fetchFn.calls.length, 4);
+  // '@' stays literal, digits are shifted, '+' is escaped so it isn't read as a space, and no id_code is sent
+  assert.equal(fetchFn.calls.length, 2);
+  assert.equal(
+    fetchFn.calls[0].url,
+    `https://gate.ucloud.akuvox.com:8600/login?user=xvhu0%2Bke@hadpsoh.frp&passwd=${doubleMd5('pw')}`,
+  );
 });
 
 test('beginEmailLogin returns credentials directly when no emailed code is needed', async () => {

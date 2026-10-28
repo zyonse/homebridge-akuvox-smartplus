@@ -28,6 +28,12 @@
         "type": "number",
         "minimum": 0.5
       },
+      "onlyListedDoors": {
+        "title": "Only add doors listed below",
+        "description": "Useful for community accounts with many building doors.",
+        "type": "boolean",
+        "default": false
+      },
       "doors": {
         "title": "Per-door settings",
         "type": "array",
@@ -35,7 +41,7 @@
           "type": "object",
           "properties": {
             "name": {
-              "title": "Door or device name (as printed by the login command)",
+              "title": "Door name, device name, or mac:relay id (as printed by the login command)",
               "type": "string",
               "required": true
             },
