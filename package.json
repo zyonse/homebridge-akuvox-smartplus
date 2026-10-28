@@ -1,0 +1,45 @@
+{
+  "displayName": "Homebridge Akuvox SmartPlus",
+  "name": "homebridge-akuvox-smartplus",
+  "version": "0.1.0",
+  "description": "Homebridge plugin for opening Akuvox SmartPlus door and garage relays from Apple Home",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.7.0",
+    "homebridge": "^1.6.0 || ^2.0.0"
+  },
+  "prettier": {
+    "singleQuote": true,
+    "semi": true,
+    "trailingComma": "all"
+  },
+  "main": "dist/index.js",
+  "bin": {
+    "akuvox-smartplus-login": "dist/cli.js"
+  },
+  "scripts": {
+    "lint": "eslint src/**/*.ts --max-warnings=0",
+    "watch": "npm run build && npm link && nodemon",
+    "build": "rimraf ./dist && tsc",
+    "login": "node dist/cli.js",
+    "prepublishOnly": "npm run lint && npm run build && npm test",
+    "test": "npm run build && node --test \"test/**/*.test.js\""
+  },
+  "keywords": [
+    "homebridge-plugin",
+    "akuvox",
+    "smartplus",
+    "intercom",
+    "garage"
+  ],
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@typescript-eslint/eslint-plugin": "^6.21.0",
+    "@typescript-eslint/parser": "^6.21.0",
+    "eslint": "^8.57.1",
+    "homebridge": "^1.11.4",
+    "nodemon": "^3.1.14",
+    "rimraf": "^5.0.10",
+    "typescript": "^5.9.3"
+  }
+}

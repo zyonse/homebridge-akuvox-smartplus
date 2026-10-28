@@ -1,0 +1,66 @@
+{
+  "pluginAlias": "AkuvoxSmartPlus",
+  "pluginType": "platform",
+  "singular": true,
+  "headerDisplay": "Before enabling, sign in once from a terminal on the Homebridge host: `akuvox-smartplus-login --storage <homebridge storage path>`. The plugin keeps that session refreshed automatically.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "default": "Akuvox SmartPlus",
+        "required": true
+      },
+      "defaultType": {
+        "title": "Show doors as",
+        "type": "string",
+        "default": "garage",
+        "oneOf": [
+          { "title": "Garage door", "enum": ["garage"] },
+          { "title": "Momentary switch (no confirmation for automations)", "enum": ["switch"] },
+          { "title": "Lock", "enum": ["lock"] }
+        ]
+      },
+      "openDuration": {
+        "title": "Seconds to show as open after triggering",
+        "description": "SmartPlus doesn't report door position. Defaults: garage 60, switch 1, lock 10.",
+        "type": "number",
+        "minimum": 0.5
+      },
+      "doors": {
+        "title": "Per-door settings",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "title": "Door or device name (as printed by the login command)",
+              "type": "string",
+              "required": true
+            },
+            "type": {
+              "title": "Show as",
+              "type": "string",
+              "oneOf": [
+                { "title": "Garage door", "enum": ["garage"] },
+                { "title": "Momentary switch", "enum": ["switch"] },
+                { "title": "Lock", "enum": ["lock"] }
+              ]
+            },
+            "openDuration": {
+              "title": "Seconds to show as open",
+              "type": "number",
+              "minimum": 0.5
+            },
+            "hidden": {
+              "title": "Hide from HomeKit",
+              "type": "boolean",
+              "default": false
+            }
+          }
+        }
+      }
+    }
+  }
+}
