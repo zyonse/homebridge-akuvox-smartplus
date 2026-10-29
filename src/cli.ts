@@ -98,6 +98,7 @@ async function main() {
         const code = await ask('Code from verification email: ');
         credentials = await verifyEmailCode(result.subdomain, result.host, account, code);
       }
+      credentials = { ...credentials, account };
     }
 
     const api = new AkuvoxAPI(credentials, console, (updated) => {

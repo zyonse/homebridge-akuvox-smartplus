@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { HomebridgeAPI } = require('homebridge/lib/api');
+// homebridge 2 only exports its entry point, so load the API class from beside it
+const { HomebridgeAPI } = require(path.join(path.dirname(require.resolve('homebridge')), 'api.js'));
 
 const { AkuvoxPlatform } = require('../dist/platform');
 const { fakeFetch, silentLog } = require('./helpers/fakeFetch');
@@ -21,16 +22,31 @@ const USERCONF = {
 
 const originalFetch = globalThis.fetch;
 
-async function setup({ config = {}, userconf = { json: USERCONF }, opendoor = { json: { result: 0 } }, credentials = true } = {}) {
+const LOGIN = {
+  result: 0,
+  datas: { token: 'fresh-tok', refresh_token: 'fresh-auth', rest_server_https: 'rest.ucloud.akuvox.com:8443' },
+};
+
+async function setup({
+  config = {},
+  userconf = { json: USERCONF },
+  opendoor = { json: { result: 0 } },
+  login = { json: LOGIN },
+  refresh = { json: { err_code: 1, message: 'expired' } },
+  credentials = true,
+} = {}) {
   const storage = fs.mkdtempSync(path.join(os.tmpdir(), 'akuvox-test-'));
   if (credentials) {
     fs.writeFileSync(path.join(storage, 'akuvox-smartplus.json'), JSON.stringify({
       subdomain: 'ucloud', host: 'ucloud.akuvox.com:8443', authToken: 'auth', token: 'tok', refreshedAt: new Date().toISOString(),
+      ...(typeof credentials === 'object' ? credentials : {}),
     }));
   }
   const fetchFn = fakeFetch([
     { match: (call) => call.url.includes('/userconf'), reply: userconf },
     { match: (call) => call.url.includes('/opendoor'), reply: opendoor },
+    { match: (call) => call.url.includes('/login?'), reply: login },
+    { match: (call) => call.url.endsWith('/refresh_token'), reply: refresh },
   ]);
   globalThis.fetch = fetchFn;
 
@@ -158,5 +174,73 @@ test('missing login logs the command to run', async () => {
   const { platform, errors, fetchFn } = await setup({ credentials: false });
   await platform.discoverDevices();
   assert.equal(fetchFn.calls.length, 0);
-  assert.match(errors[0], /akuvox-smartplus-login --storage/);
+  assert.match(errors[0], /email and password in the plugin settings/);
+});
+
+const LOGIN_OPTIONS = { options: { email: 'me@example.com', password: 'hunter2', region: 'ucloud' } };
+const readSaved = (storage) => JSON.parse(fs.readFileSync(path.join(storage, 'akuvox-smartplus.json'), 'utf8'));
+
+test('signs in from the plugin settings when no session is saved', async (t) => {
+  const { api, platform, registered, fetchFn, storage, errors } = await setup({ credentials: false, config: LOGIN_OPTIONS });
+  await platform.discoverDevices();
+  t.after(() => api.emit('shutdown'));
+
+  assert.deepEqual(errors, []);
+  assert.equal(registered.length, 3);
+  const login = fetchFn.calls.find((call) => call.url.includes('/login?'));
+  assert.match(login.url, /^https:\/\/gate\.ucloud\.akuvox\.com:8600\/login\?user=ph@hadpsoh\.frp&passwd=[0-9a-f]{32}$/);
+
+  const saved = readSaved(storage);
+  assert.equal(saved.token, 'fresh-tok');
+  assert.equal(saved.authToken, 'fresh-auth');
+  assert.equal(saved.account, 'me@example.com');
+  assert.equal(saved.host, 'rest.ucloud.akuvox.com:8443');
+  // The password is never written to disk
+  assert.doesNotMatch(fs.readFileSync(path.join(storage, 'akuvox-smartplus.json'), 'utf8'), /hunter2/);
+});
+
+test('a saved session is reused without signing in again', async (t) => {
+  const { api, platform, fetchFn } = await setup({ credentials: { account: 'me@example.com' }, config: LOGIN_OPTIONS });
+  await platform.discoverDevices();
+  t.after(() => api.emit('shutdown'));
+  assert.equal(fetchFn.calls.filter((call) => call.url.includes('/login?')).length, 0);
+});
+
+test('changing the configured email signs in to the new account', async (t) => {
+  const { api, platform, fetchFn, storage } = await setup({ credentials: { account: 'old@example.com' }, config: LOGIN_OPTIONS });
+  await platform.discoverDevices();
+  t.after(() => api.emit('shutdown'));
+  assert.equal(fetchFn.calls.filter((call) => call.url.includes('/login?')).length, 1);
+  assert.equal(readSaved(storage).account, 'me@example.com');
+});
+
+test('a revoked session is recovered by signing in with the configured password', async (t) => {
+  const { api, platform, registered, fetchFn, storage, errors } = await setup({
+    config: LOGIN_OPTIONS,
+    // The saved token was revoked (e.g. by signing in on the phone), only the new one works
+    userconf: (call) => (call.url.includes('token=fresh-tok') ? { json: USERCONF } : { status: 401 }),
+  });
+  await platform.discoverDevices();
+  t.after(() => api.emit('shutdown'));
+
+  assert.deepEqual(errors, []);
+  assert.equal(registered.length, 3);
+  assert.deepEqual(
+    fetchFn.calls.map((call) => new URL(call.url).pathname),
+    ['/userconf', '/refresh_token', '/login', '/userconf'],
+  );
+  assert.equal(readSaved(storage).token, 'fresh-tok');
+});
+
+test('a wrong password reports a sign-in error', async (t) => {
+  const { api, platform, fetchFn, errors } = await setup({
+    credentials: false,
+    config: LOGIN_OPTIONS,
+    login: { json: { err_code: '1000100004', message: 'user not exist or passwd incorrect.' } },
+  });
+  await platform.discoverDevices();
+  t.after(() => api.emit('shutdown'));
+  assert.match(errors[0], /sign-in failed/);
+  // One attempt on the configured region and one on the global fallback
+  assert.equal(fetchFn.calls.filter((call) => call.url.includes('/login?')).length, 2);
 });

@@ -18,9 +18,9 @@
     "akuvox-smartplus-login": "dist/cli.js"
   },
   "scripts": {
-    "lint": "eslint src/**/*.ts --max-warnings=0",
+    "lint": "eslint src --max-warnings=0",
     "watch": "npm run build && npm link && nodemon",
-    "build": "rimraf ./dist && tsc",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc",
     "login": "node dist/cli.js",
     "prepublishOnly": "npm run lint && npm run build && npm test",
     "test": "npm run build && node --test \"test/**/*.test.js\""
@@ -33,13 +33,12 @@
     "garage"
   ],
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^20.19.43",
-    "@typescript-eslint/eslint-plugin": "^6.21.0",
-    "@typescript-eslint/parser": "^6.21.0",
-    "eslint": "^8.57.1",
-    "homebridge": "^1.11.4",
+    "eslint": "^10.13.0",
+    "homebridge": "^2.4.0",
     "nodemon": "^3.1.14",
-    "rimraf": "^5.0.10",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1"
   }
 }

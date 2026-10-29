@@ -1,7 +1,8 @@
-import { API, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service, Characteristic } from 'homebridge';
+import type { API, DynamicPlatformPlugin, Logger, PlatformConfig } from 'homebridge' with { 'resolution-mode': 'import' };
+import type { PlatformAccessory, Service, Characteristic } from 'homebridge' with { 'resolution-mode': 'import' };
 
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
-import AkuvoxAPI, { AkuvoxAuthError, DoorRelay } from './AkuvoxAPI';
+import AkuvoxAPI, { AkuvoxAuthError, AkuvoxCredentials, DoorRelay, beginEmailLogin } from './AkuvoxAPI';
 import { loadCredentials, saveCredentials, credentialsPath } from './credentials';
 import { AccessoryType, DEFAULT_OPEN_DURATION, RelayAccessory } from './accessories/RelayAccessory';
 
@@ -18,7 +19,7 @@ interface DoorConfig {
 
 /**
  * HomebridgePlatform
- * Loads the saved SmartPlus login, discovers door relays, and keeps the session token fresh
+ * Signs in to SmartPlus, discovers door relays, and keeps the session token fresh
  */
 export class AkuvoxPlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service;
@@ -60,30 +61,75 @@ export class AkuvoxPlatform implements DynamicPlatformPlugin {
   }
 
   /**
-   * Load the saved login, fetch the account's door relays, and register them as accessories
+   * Sign in with the email and password from the plugin settings
+   * Accounts that need an emailed verification code have to use the login command instead
+   */
+  private async signIn(storagePath: string): Promise<AkuvoxCredentials> {
+    const { email, password, region } = this.config.options ?? {};
+    const account = String(email).trim();
+    const result = await beginEmailLogin(account, String(password), [...new Set([region || 'ucloud', 'ecloud'])]);
+    if (!('credentials' in result)) {
+      throw new AkuvoxAuthError('SmartPlus requires an emailed verification code for this account. '
+        + `Run \`${LOGIN_COMMAND} --storage ${storagePath}\` once, then restart Homebridge.`);
+    }
+    this.log.info(`Signed in to SmartPlus as ${account}`);
+    return { ...result.credentials, account };
+  }
+
+  /**
+   * Sign in (or load the saved session), fetch the account's door relays, and register them as accessories
    * Also remove accessories that are no longer present on the user's account
    */
   async discoverDevices() {
     const storagePath = this.api.user.storagePath();
-    const credentials = await loadCredentials(storagePath);
-    if (!credentials) {
-      this.log.error(`Not logged in. Run \`${LOGIN_COMMAND} --storage ${storagePath}\` then restart Homebridge.`);
-      return;
+    const hasLogin = Boolean(this.config.options?.email && this.config.options?.password);
+    let credentials = await loadCredentials(storagePath);
+
+    // A session saved for a different email than the one now configured belongs to the old account
+    const configuredAccount = String(this.config.options?.email ?? '').trim().toLowerCase();
+    if (hasLogin && credentials?.account && credentials.account.toLowerCase() !== configuredAccount) {
+      credentials = undefined;
     }
 
-    this.akuvox = new AkuvoxAPI(credentials, this.log, async (updated) => {
-      await saveCredentials(storagePath, updated);
-      this.log.debug('Saved refreshed credentials to', credentialsPath(storagePath));
-    });
+    if (!credentials) {
+      if (!hasLogin) {
+        this.log.error('Not logged in. Enter your SmartPlus email and password in the plugin settings, '
+          + `or run \`${LOGIN_COMMAND} --storage ${storagePath}\`, then restart Homebridge.`);
+        return;
+      }
+      try {
+        credentials = await this.signIn(storagePath);
+        await saveCredentials(storagePath, credentials);
+      } catch (error) {
+        this.log.error('SmartPlus sign-in failed:', (error as Error).message);
+        return;
+      }
+    }
+
+    this.akuvox = new AkuvoxAPI(
+      credentials,
+      this.log,
+      async (updated) => {
+        await saveCredentials(storagePath, updated);
+        this.log.debug('Saved refreshed credentials to', credentialsPath(storagePath));
+      },
+      undefined,
+      // With a password configured, a revoked session (e.g. after signing in on the phone) is recovered automatically
+      hasLogin ? () => this.signIn(storagePath) : undefined,
+    );
 
     let relays: DoorRelay[];
     let fromCache = false;
     try {
       relays = await this.akuvox.getDoorRelays();
+      // Names and ids to copy into the "doors" setting
+      this.log.info('Doors on this account:', relays.map((relay) => `${relay.doorName} (${relay.id})`).join(', '));
     } catch (error) {
       if (error instanceof AkuvoxAuthError) {
-        this.log.error(`SmartPlus login expired (${error.message}). Run \`${LOGIN_COMMAND} --storage ${storagePath}\` `
-          + 'then restart Homebridge.');
+        this.log.error(`SmartPlus login expired (${error.message}). `
+          + (hasLogin
+            ? 'Check the email and password in the plugin settings, then restart Homebridge.'
+            : `Run \`${LOGIN_COMMAND} --storage ${storagePath}\` then restart Homebridge.`));
       } else {
         this.log.error('Failed to fetch door list, using cached accessories:', (error as Error).message);
       }

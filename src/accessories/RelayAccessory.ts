@@ -1,4 +1,4 @@
-import { CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
+import type { CharacteristicValue, PlatformAccessory, Service } from 'homebridge' with { 'resolution-mode': 'import' };
 
 import { AkuvoxPlatform } from '../platform';
 import { DoorRelay } from '../AkuvoxAPI';

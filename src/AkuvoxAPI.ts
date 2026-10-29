@@ -23,6 +23,8 @@ export interface AkuvoxCredentials {
   // Short-lived session token sent with every request
   token: string;
   refreshedAt?: string;
+  // Email the session was signed in with, to notice when the configured account changes
+  account?: string;
 }
 
 export interface DoorRelay {
@@ -387,17 +389,24 @@ export async function verifyEmailCode(subdomain: string, host: string, account: 
   return credentialsFrom(data, subdomain, host);
 }
 
+// Wait after a failed sign-in before trying again, so a wrong password can't lock the account
+const RELOGIN_COOLDOWN_MS = 10 * 60 * 1000;
+
 /**
- * An authenticated SmartPlus session that refreshes its token when it expires
+ * An authenticated SmartPlus session that refreshes its token when it expires,
+ * and signs in again with `relogin` if SmartPlus revokes the session entirely
  */
 export default class AkuvoxAPI {
   private refreshing?: Promise<void>;
+  private relogging?: Promise<void>;
+  private reloginBlockedUntil = 0;
 
   constructor(
     private credentials: AkuvoxCredentials,
     private readonly log: AkuvoxLogger,
     private readonly onCredentialsChanged: (credentials: AkuvoxCredentials) => void | Promise<void> = () => undefined,
     private readonly fetchFn: FetchFn = fetch,
+    private readonly relogin?: () => Promise<AkuvoxCredentials>,
   ) {}
 
   get currentCredentials(): AkuvoxCredentials {
@@ -492,7 +501,7 @@ export default class AkuvoxAPI {
   }
 
   /**
-   * Send a request built around the current token, refreshing and retrying once if the session was rejected
+   * Send a request built around the current token, recovering the session and retrying once if it was rejected
    */
   private async authenticated(build: (token: string) => ApiRequest) {
     const token = this.credentials.token;
@@ -503,8 +512,48 @@ export default class AkuvoxAPI {
         throw error;
       }
       this.log.debug('SmartPlus rejected the session token:', error.message);
-      await this.refreshToken(token);
+      await this.recoverSession(token);
       return sendRequest(this.fetchFn, build(this.credentials.token));
     }
+  }
+
+  private async recoverSession(failedToken: string) {
+    try {
+      await this.refreshToken(failedToken);
+    } catch (error) {
+      if (!(error instanceof AkuvoxAuthError) || !this.relogin) {
+        throw error;
+      }
+      await this.signInAgain(failedToken, error);
+    }
+  }
+
+  /**
+   * Replace a revoked session by signing in again, shared by concurrent callers like refreshToken
+   */
+  private async signInAgain(failedToken: string, cause: AkuvoxAuthError): Promise<void> {
+    if (this.relogging) {
+      return this.relogging;
+    }
+    if (this.credentials.token !== failedToken) {
+      return;
+    }
+    if (Date.now() < this.reloginBlockedUntil) {
+      throw cause;
+    }
+
+    this.relogging = (async () => {
+      this.log.info('SmartPlus session ended, signing in again');
+      try {
+        this.credentials = await this.relogin!();
+      } catch (error) {
+        this.reloginBlockedUntil = Date.now() + RELOGIN_COOLDOWN_MS;
+        throw error;
+      }
+      await this.onCredentialsChanged(this.currentCredentials);
+    })().finally(() => {
+      this.relogging = undefined;
+    });
+    return this.relogging;
   }
 }

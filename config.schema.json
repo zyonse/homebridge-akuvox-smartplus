@@ -2,15 +2,53 @@
   "pluginAlias": "AkuvoxSmartPlus",
   "pluginType": "platform",
   "singular": true,
-  "headerDisplay": "Before enabling, sign in once from a terminal on the Homebridge host: `akuvox-smartplus-login --storage <homebridge storage path>`. The plugin keeps that session refreshed automatically.",
+  "headerDisplay": "SmartPlus allows one app session per account, so signing in here will sign out the SmartPlus phone app. A separate family-member account avoids that.",
   "schema": {
     "type": "object",
     "properties": {
       "name": {
         "title": "Name",
         "type": "string",
+        "condition": {
+          "functionBody": "return 0"
+        },
         "default": "Akuvox SmartPlus",
-        "required": true
+        "required": true,
+        "description": "You shouldn't need to change this."
+      },
+      "options": {
+        "title": "SmartPlus App Login",
+        "type": "object",
+        "required": true,
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string",
+            "required": true
+          },
+          "password": {
+            "title": "Password",
+            "type": "string",
+            "required": true,
+            "x-schema-form": {
+              "type": "password"
+            }
+          },
+          "region": {
+            "title": "Region",
+            "type": "string",
+            "default": "ucloud",
+            "oneOf": [
+              { "title": "North America", "enum": ["ucloud"] },
+              { "title": "Europe / Global", "enum": ["ecloud"] },
+              { "title": "Asia Pacific", "enum": ["scloud"] },
+              { "title": "Oceania", "enum": ["aucloud"] },
+              { "title": "China", "enum": ["ccloud"] },
+              { "title": "Japan", "enum": ["jcloud"] },
+              { "title": "Russia", "enum": ["rucloud"] }
+            ]
+          }
+        }
       },
       "defaultType": {
         "title": "Show doors as",

@@ -149,3 +149,20 @@ test('beginEmailLogin returns credentials directly when no emailed code is neede
   assert.equal(result.credentials.authToken, 'r');
   assert.equal(result.credentials.host, 'ucloud.akuvox.com:8443');
 });
+
+test('a failed sign-in is not retried during the cooldown', async () => {
+  const fetchFn = fakeFetch([
+    { match: (call) => call.url.includes('/opendoor'), reply: { status: 401 } },
+    { match: (call) => call.url.endsWith('/refresh_token'), reply: { json: { err_code: 1, message: 'expired' } } },
+  ]);
+  let attempts = 0;
+  const relogin = async () => {
+    attempts++;
+    throw new AkuvoxAuthError('wrong password');
+  };
+  const api = new AkuvoxAPI(credentials(), silentLog, undefined, fetchFn, relogin);
+
+  await assert.rejects(api.openDoor({ mac: 'A', relayId: '0' }), /wrong password/);
+  await assert.rejects(api.openDoor({ mac: 'A', relayId: '0' }), AkuvoxAuthError);
+  assert.equal(attempts, 1);
+});
