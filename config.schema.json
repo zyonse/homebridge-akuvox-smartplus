@@ -104,6 +104,39 @@
             }
           }
         }
+      },
+      "cameras": {
+        "title": "Cameras",
+        "description": "Intercom cameras to add to HomeKit. Device names and ids are logged when Homebridge starts.",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "title": "Device name or id (MAC)",
+              "type": "string",
+              "required": true
+            }
+          }
+        }
+      },
+      "videoEncoder": {
+        "title": "Camera video encoder",
+        "type": "string",
+        "default": "libx264",
+        "oneOf": [
+          { "title": "Software (libx264)", "enum": ["libx264"] },
+          { "title": "macOS hardware (h264_videotoolbox)", "enum": ["h264_videotoolbox"] },
+          { "title": "Raspberry Pi hardware (h264_v4l2m2m)", "enum": ["h264_v4l2m2m"] },
+          { "title": "No transcoding (copy)", "enum": ["copy"] }
+        ],
+        "description": "No transcoding uses the least CPU but always sends the camera's 720p stream."
+      },
+      "videoProcessor": {
+        "title": "ffmpeg path",
+        "type": "string",
+        "placeholder": "bundled ffmpeg-for-homebridge",
+        "description": "Only set this to use a different ffmpeg build."
       }
     }
   }

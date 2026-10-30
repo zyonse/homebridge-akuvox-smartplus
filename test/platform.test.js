@@ -14,7 +14,10 @@ const USERCONF = {
   result: 0,
   datas: {
     dev_list: [
-      { location: 'Parking', mac: 'AABBCC', relay: [{ relay_id: 0, door_name: 'Garage' }, { relay_id: 1, door_name: 'Side Gate' }] },
+      {
+        location: 'Parking', mac: 'AABBCC', rtsp_pwd: 'cam-secret',
+        relay: [{ relay_id: 0, door_name: 'Garage' }, { relay_id: 1, door_name: 'Side Gate' }],
+      },
       { location: 'Lobby', mac: 'DDEEFF', relay: [{ relay_id: 0, door_name: 'Front Door' }] },
     ],
   },
@@ -24,7 +27,10 @@ const originalFetch = globalThis.fetch;
 
 const LOGIN = {
   result: 0,
-  datas: { token: 'fresh-tok', refresh_token: 'fresh-auth', rest_server_https: 'rest.ucloud.akuvox.com:8443' },
+  datas: {
+    token: 'fresh-tok', refresh_token: 'fresh-auth', rest_server_https: 'rest.ucloud.akuvox.com:8443',
+    vrtsp_server: 'rtspsrv1.ucloud.akuvox.com:554',
+  },
 };
 
 async function setup({
@@ -243,4 +249,47 @@ test('a wrong password reports a sign-in error', async (t) => {
   assert.match(errors[0], /sign-in failed/);
   // One attempt on the configured region and one on the global fallback
   assert.equal(fetchFn.calls.filter((call) => call.url.includes('/login?')).length, 2);
+});
+
+test('only cameras listed in settings are added, as HomeKit cameras', async (t) => {
+  const { api, platform, registered } = await setup({
+    credentials: { rtspServer: 'rtspsrv1.ucloud.akuvox.com:554' },
+    config: { onlyListedDoors: true, cameras: [{ name: 'aabbcc' }] },
+  });
+  await platform.discoverDevices();
+  t.after(() => api.emit('shutdown'));
+
+  assert.deepEqual(registered.map((accessory) => accessory.displayName), ['Parking']);
+  const [camera] = registered;
+  assert.equal(camera.category, api.hap.Categories.CAMERA);
+  assert.ok(camera.getService(api.hap.Service.CameraRTPStreamManagement));
+  assert.deepEqual(camera.context.camera, { id: 'AABBCC', name: 'Parking', mac: 'AABBCC', rtspPassword: 'cam-secret' });
+});
+
+test('no cameras are added unless listed', async (t) => {
+  const { api, platform, registered } = await setup({ credentials: { rtspServer: 'rtspsrv1.ucloud.akuvox.com:554' } });
+  await platform.discoverDevices();
+  t.after(() => api.emit('shutdown'));
+  assert.equal(registered.filter((accessory) => accessory.context.camera).length, 0);
+});
+
+test('a session saved before camera support signs in once more to learn the camera server', async (t) => {
+  const { api, platform, registered, fetchFn, storage } = await setup({
+    credentials: { account: 'me@example.com' },
+    config: { ...LOGIN_OPTIONS, onlyListedDoors: true, cameras: [{ name: 'Parking' }] },
+  });
+  await platform.discoverDevices();
+  t.after(() => api.emit('shutdown'));
+
+  assert.equal(fetchFn.calls.filter((call) => call.url.includes('/login?')).length, 1);
+  assert.equal(readSaved(storage).rtspServer, 'rtspsrv1.ucloud.akuvox.com:554');
+  assert.deepEqual(registered.map((accessory) => accessory.displayName), ['Parking']);
+});
+
+test('cameras are skipped with an error when the camera server is unknown and no password is set', async (t) => {
+  const { api, platform, registered, errors } = await setup({ config: { cameras: [{ name: 'Parking' }] } });
+  await platform.discoverDevices();
+  t.after(() => api.emit('shutdown'));
+  assert.equal(registered.filter((accessory) => accessory.context.camera).length, 0);
+  assert.match(errors.join('\n'), /did not return a camera server/);
 });

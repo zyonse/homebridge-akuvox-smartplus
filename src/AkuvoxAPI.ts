@@ -25,6 +25,16 @@ export interface AkuvoxCredentials {
   refreshedAt?: string;
   // Email the session was signed in with, to notice when the configured account changes
   account?: string;
+  // host:port of the RTSP relay that serves intercom cameras, from the login response
+  rtspServer?: string;
+}
+
+export interface DoorCamera {
+  // Device MAC, stable across restarts and renames
+  id: string;
+  name: string;
+  mac: string;
+  rtspPassword: string;
 }
 
 export interface DoorRelay {
@@ -214,6 +224,27 @@ export function parseDoorRelays(userConf: any): DoorRelay[] {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function parseCameras(userConf: any): DoorCamera[] {
+  const devices = Array.isArray(userConf?.dev_list) ? userConf.dev_list : [];
+  return devices
+    .filter((device: { location?: unknown; mac?: unknown; rtsp_pwd?: unknown }) => device?.location && device?.mac && device?.rtsp_pwd)
+    .map((device: { location: unknown; mac: unknown; rtsp_pwd: unknown }) => ({
+      id: String(device.mac).trim(),
+      name: String(device.location).trim(),
+      mac: String(device.mac).trim(),
+      rtspPassword: String(device.rtsp_pwd),
+    }));
+}
+
+/**
+ * The SmartPlus app streams from rtsp://user:<device rtsp_pwd>@<vrtsp_server>/<mac> (UrlTools.getLiveViewUrl)
+ * The relay ignores RTP-over-TCP requests and always answers with UDP ports, so clients must use UDP
+ */
+export function cameraUrl(camera: DoorCamera, rtspServer: string) {
+  return `rtsp://user:${encodeURIComponent(camera.rtspPassword)}@${rtspServer}/${camera.mac}`;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function credentialsFrom(data: any, subdomain: string, fallbackHost = ''): AkuvoxCredentials {
   // SMS login calls the long-lived credential auth_token, email login calls it refresh_token
   const authToken = String(data?.auth_token || data?.refresh_token || '');
@@ -227,6 +258,8 @@ function credentialsFrom(data: any, subdomain: string, fallbackHost = ''): Akuvo
     authToken,
     token,
     refreshedAt: new Date().toISOString(),
+    // Email logins return vrtsp_server, SMS logins rtsp_server
+    rtspServer: resolveHost(String(data?.vrtsp_server || data?.rtsp_server || ''), subdomain) || undefined,
   };
 }
 
@@ -413,13 +446,20 @@ export default class AkuvoxAPI {
     return { ...this.credentials };
   }
 
-  async getDoorRelays() {
+  /**
+   * Fetch the account's door relays and intercom cameras
+   */
+  async getDevices() {
     const data = await this.authenticated((token) => ({
       method: 'GET',
       url: `https://${this.credentials.host}/userconf?token=${encodeURIComponent(token)}`,
       headers: this.appHeaders(token, '6.5'),
     }));
-    return parseDoorRelays(data);
+    return { relays: parseDoorRelays(data), cameras: parseCameras(data) };
+  }
+
+  async getDoorRelays() {
+    return (await this.getDevices()).relays;
   }
 
   async openDoor(relay: Pick<DoorRelay, 'mac' | 'relayId'>) {

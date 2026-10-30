@@ -2,9 +2,10 @@ import type { API, DynamicPlatformPlugin, Logger, PlatformConfig } from 'homebri
 import type { PlatformAccessory, Service, Characteristic } from 'homebridge' with { 'resolution-mode': 'import' };
 
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
-import AkuvoxAPI, { AkuvoxAuthError, AkuvoxCredentials, DoorRelay, beginEmailLogin } from './AkuvoxAPI';
+import AkuvoxAPI, { AkuvoxAuthError, AkuvoxCredentials, DoorCamera, DoorRelay, beginEmailLogin } from './AkuvoxAPI';
 import { loadCredentials, saveCredentials, credentialsPath } from './credentials';
 import { AccessoryType, DEFAULT_OPEN_DURATION, RelayAccessory } from './accessories/RelayAccessory';
+import { CameraAccessory } from './accessories/CameraAccessory';
 
 // SmartPlus doesn't report token expiry, so refresh well before sessions have been seen to lapse
 const TOKEN_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -15,6 +16,22 @@ interface DoorConfig {
   type?: AccessoryType;
   hidden?: boolean;
   openDuration?: number;
+}
+
+interface CameraConfig {
+  name: string;
+}
+
+/**
+ * The ffmpeg-for-homebridge build includes the encoders HomeKit streaming needs; fall back to ffmpeg on the PATH
+ */
+function defaultFfmpegPath() {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return (require('ffmpeg-for-homebridge') as string | undefined) || 'ffmpeg';
+  } catch {
+    return 'ffmpeg';
+  }
 }
 
 /**
@@ -28,7 +45,7 @@ export class AkuvoxPlatform implements DynamicPlatformPlugin {
 
   // This is used to track restored cached accessories
   public readonly accessories: PlatformAccessory[] = [];
-  private readonly handlers: RelayAccessory[] = [];
+  private readonly handlers: (RelayAccessory | CameraAccessory)[] = [];
   private refreshTimer?: NodeJS.Timeout;
 
   constructor(
@@ -106,24 +123,18 @@ export class AkuvoxPlatform implements DynamicPlatformPlugin {
       }
     }
 
-    this.akuvox = new AkuvoxAPI(
-      credentials,
-      this.log,
-      async (updated) => {
-        await saveCredentials(storagePath, updated);
-        this.log.debug('Saved refreshed credentials to', credentialsPath(storagePath));
-      },
-      undefined,
-      // With a password configured, a revoked session (e.g. after signing in on the phone) is recovered automatically
-      hasLogin ? () => this.signIn(storagePath) : undefined,
-    );
+    // With a password configured, a revoked session (e.g. after signing in on the phone) is recovered automatically
+    const signIn = hasLogin ? () => this.signIn(storagePath) : undefined;
+    this.connect(credentials, storagePath, signIn);
 
     let relays: DoorRelay[];
+    let cameras: DoorCamera[];
     let fromCache = false;
     try {
-      relays = await this.akuvox.getDoorRelays();
-      // Names and ids to copy into the "doors" setting
+      ({ relays, cameras } = await this.akuvox!.getDevices());
+      // Names and ids to copy into the "doors" and "cameras" settings
       this.log.info('Doors on this account:', relays.map((relay) => `${relay.doorName} (${relay.id})`).join(', '));
+      this.log.info('Cameras on this account:', cameras.map((camera) => `${camera.name} (${camera.id})`).join(', '));
     } catch (error) {
       if (error instanceof AkuvoxAuthError) {
         this.log.error(`SmartPlus login expired (${error.message}). `
@@ -135,6 +146,7 @@ export class AkuvoxPlatform implements DynamicPlatformPlugin {
       }
       // Keep cached doors working, a temporary outage shouldn't remove them from Home
       relays = this.accessories.map((accessory) => accessory.context.relay).filter(Boolean);
+      cameras = this.accessories.map((accessory) => accessory.context.camera).filter(Boolean);
       fromCache = true;
     }
 
@@ -168,7 +180,9 @@ export class AkuvoxPlatform implements DynamicPlatformPlugin {
       this.handlers.push(new RelayAccessory(this, accessory, relay, type, openDuration));
     }
 
-    // Only prune when the door list came from SmartPlus, hidden doors are pruned too
+    await this.setUpCameras(cameras, activeUUIDs, storagePath, signIn);
+
+    // Only prune when the device list came from SmartPlus, hidden doors and unlisted cameras are pruned too
     if (!fromCache) {
       const stale = this.accessories.filter((accessory) => !activeUUIDs.has(accessory.UUID));
       if (stale.length) {
@@ -180,8 +194,76 @@ export class AkuvoxPlatform implements DynamicPlatformPlugin {
     this.scheduleTokenRefresh(credentials.refreshedAt);
   }
 
-  private matchesId(name: string | undefined, relay: DoorRelay) {
-    return String(name ?? '').trim().toLowerCase() === relay.id.toLowerCase();
+  /**
+   * Add the cameras listed in the "cameras" setting; cameras are opt-in since community accounts can see many
+   */
+  private connect(credentials: AkuvoxCredentials, storagePath: string, signIn?: () => Promise<AkuvoxCredentials>) {
+    this.akuvox = new AkuvoxAPI(
+      credentials,
+      this.log,
+      async (updated) => {
+        await saveCredentials(storagePath, updated);
+        this.log.debug('Saved refreshed credentials to', credentialsPath(storagePath));
+      },
+      undefined,
+      signIn,
+    );
+  }
+
+  private async setUpCameras(
+    cameras: DoorCamera[],
+    activeUUIDs: Set<string>,
+    storagePath: string,
+    signIn?: () => Promise<AkuvoxCredentials>,
+  ) {
+    const cameraConfigs: CameraConfig[] = Array.isArray(this.config.cameras) ? this.config.cameras : [];
+    const wanted = (camera: DoorCamera) => cameraConfigs.find((config) => this.matchesId(config.name, camera))
+      || cameraConfigs.find((config) => String(config.name ?? '').trim().toLowerCase() === camera.name.toLowerCase());
+    const selected = cameras.filter((camera) => wanted(camera));
+    if (!selected.length) {
+      return;
+    }
+
+    // Sessions saved before camera support didn't record the RTSP server; one fresh sign-in returns it
+    let rtspServer = this.akuvox!.currentCredentials.rtspServer;
+    if (!rtspServer && signIn) {
+      try {
+        const credentials = await signIn();
+        await saveCredentials(storagePath, credentials);
+        this.connect(credentials, storagePath, signIn);
+        rtspServer = credentials.rtspServer;
+      } catch (error) {
+        this.log.error('Could not sign in to look up the camera server:', (error as Error).message);
+      }
+    }
+    if (!rtspServer) {
+      this.log.error('SmartPlus did not return a camera server for this account, so cameras are unavailable. '
+        + `Sign in again with \`${LOGIN_COMMAND}\` or add your password to the plugin settings.`);
+      return;
+    }
+
+    const ffmpegPath = this.config.videoProcessor || defaultFfmpegPath();
+    const encoder = this.config.videoEncoder || 'libx264';
+    for (const camera of selected) {
+      const uuid = this.api.hap.uuid.generate(`camera:${camera.id}`);
+      activeUUIDs.add(uuid);
+      let accessory = this.accessories.find((cached) => cached.UUID === uuid);
+      if (accessory) {
+        this.log.info('Restoring existing camera from cache:', accessory.displayName);
+        accessory.context.camera = camera;
+        this.api.updatePlatformAccessories([accessory]);
+      } else {
+        this.log.info('Adding new camera:', camera.name);
+        accessory = new this.api.platformAccessory(camera.name, uuid, this.api.hap.Categories.CAMERA);
+        accessory.context.camera = camera;
+        this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+      }
+      this.handlers.push(new CameraAccessory(this, accessory, camera, rtspServer, ffmpegPath, encoder));
+    }
+  }
+
+  private matchesId(name: string | undefined, device: { id: string }) {
+    return String(name ?? '').trim().toLowerCase() === device.id.toLowerCase();
   }
 
   private matches(name: string | undefined, relay: DoorRelay) {
